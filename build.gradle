@@ -1,16 +1,17 @@
-apply plugin: 'java'
-apply plugin: 'maven-publish'
-
-group = 'com.github.stacktrace-error'
-
-version 'v0.8'
-
 sourceSets.main.java.srcDirs = ["src"]
 
 repositories{
     mavenCentral()
     maven{ url "https://raw.githubusercontent.com/Zelaux/MindustryRepo/master/repository" }
     maven{ url 'https://www.jitpack.io' }
+}
+
+allprojects {
+    apply plugin: 'java'
+    apply plugin: 'maven-publish'
+
+    group = 'com.github.stacktrace-error'
+    version = 'v0.8'
 }
 
 java{
