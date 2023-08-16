@@ -11,7 +11,7 @@ configure(allprojects){
     apply plugin: 'java'
     apply plugin: 'maven-publish'
 
-    group = 'com.github.nullevoy'
+    group = 'com.github.stacktrace-error'
 }
 
 repositories{
