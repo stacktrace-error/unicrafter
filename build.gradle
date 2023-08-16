@@ -2,17 +2,14 @@ plugins{
     id 'maven-publish'
 }
 
+apply plugin: 'java'
+apply plugin: 'maven-publish'
 
-version '1.0'
+group = 'com.github.stacktrace-error'
+
+version 'v0.8'
 
 sourceSets.main.java.srcDirs = ["src"]
-
-configure(allprojects){
-    apply plugin: 'java'
-    apply plugin: 'maven-publish'
-
-    group = 'com.github.stacktrace-error'
-}
 
 repositories{
     mavenCentral()
