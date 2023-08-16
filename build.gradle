@@ -2,12 +2,17 @@ plugins{
     id 'maven-publish'
 }
 
-apply plugin: 'java'
-apply plugin: 'maven-publish'
 
 version '1.0'
 
 sourceSets.main.java.srcDirs = ["src"]
+
+configure(allprojects){
+    apply plugin: 'java'
+    apply plugin: 'maven-publish'
+
+    group = 'com.github.nullevoy'
+}
 
 repositories{
     mavenCentral()
