@@ -1,4 +1,7 @@
-apply plugin: "java"
+plugins{
+    id 'java-gradle-plugin'
+    id 'maven-publish'
+}
 
 version '1.0'
 
