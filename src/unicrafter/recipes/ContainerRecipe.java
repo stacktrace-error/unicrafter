@@ -41,45 +41,10 @@ public class ContainerRecipe extends Recipe{
         return items;
     }
 
-    @Override
-    public void addRecipeInputTable(Table table){
-        table.table(in -> { //output
-            super.addRecipeInputTable(in);
-
-            if(itemReqContainer.size > 0){
-                in.row();
-
-                in.image(Blocks.reinforcedContainer.uiIcon).size(iconSmall);
-                in.row();
-
-                in.table(Styles.black5, input -> {
-                    input.add(contentListTable(null, itemReqContainer, null, time, false)).pad(5f).grow();
-                }).pad(5f).grow();
-            }
-        });
-    }
-
-    @Override
-    public void addRecipeOutputTable(Table table){
-        table.table(out -> { //output
-            super.addRecipeOutputTable(out);
-
-            if(itemOutContainer.size > 0){
-                out.row();
-
-                out.image(Blocks.reinforcedContainer.uiIcon).size(iconSmall);
-                out.row();
-
-                out.table(Styles.black5, output -> output.add(contentListTable(null, itemOutContainer, null, time, true)).pad(5f).grow()
-                ).pad(5f).grow();
-            }
-        });
-    }
-
     public final Seq<ItemStack> itemReqContainer = new Seq<>(4), itemOutContainer = new Seq<>(4);
     public final Seq<LiquidStack> liqReqContainer = new Seq<>(4), liqOutContainer = new Seq<>(4);
 
-    public boolean wantsContainer(UniversalCrafter.UniversalBuild build){
+    /*public boolean wantsContainer(UniversalCrafter.UniversalBuild build){
         if(build.container == null) return false;
 
         for(int i = 0; i < itemReqContainer.size; i++){
@@ -102,5 +67,5 @@ public class ContainerRecipe extends Recipe{
             itemReqContainer.each(stack -> build.container.build.items.remove(stack.item, stack.amount));
             itemOutContainer.each(stack -> build.container.build.items.add(stack.item, stack.amount));
         }
-    }
+    }*/
 }

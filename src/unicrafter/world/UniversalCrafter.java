@@ -34,6 +34,7 @@ import mindustry.world.blocks.payloads.BuildPayload;
 import mindustry.world.blocks.payloads.Payload;
 import mindustry.world.blocks.payloads.PayloadBlock;
 import mindustry.world.blocks.payloads.UnitPayload;
+import mindustry.world.consumers.Consume;
 import mindustry.world.consumers.ConsumeItemDynamic;
 import mindustry.world.consumers.ConsumePayloadDynamic;
 import mindustry.world.consumers.ConsumePowerDynamic;
@@ -48,6 +49,7 @@ import unicrafter.recipes.Recipe;
 import static mindustry.Vars.*;
 
 /**A multicrafter that should support all in- and output types.
+ * Can be considered the base for the recipes to do their work on, does nothing on its own.
  * @author nullevoy */
 
 /* the list
@@ -95,20 +97,17 @@ public class UniversalCrafter extends PayloadBlock{
     public boolean instantInput = true;
     /**Outputs the first payload without an effect, for if you need the payload to look like it was already there.*/
     public boolean instantFirstOutput = false;
-    /**The block waits for the spawn effect to finish before outputting again, use Fx.none to get instant output.*/
+    /**The block waits for the spawn effect to finish before outputting again.*/
     public Effect paySpawnEffect = UniFx.payRespawn;
-    /**Enables the above behavior.*/
+    /**The block waits for the spawn effect to finish before outputting again.*/
     public boolean waitForSpawnEffect = true;
-    /**Use UniFx.payDespawn instead for unspecial non-instant ones*/
+    /**Use UniFx.payDespawn instead for non-instant ones.*/
     public Effect payDespawnEffect = UniFx.payInstantDespawn;
-
-    public boolean dumpExtraLiquid = false;
-    public boolean ignoreLiquidFullness = false;
-    public int[] liquidOutputDirections = {-1};
 
     //visuals
     /**Recipe drawers are drawn between these.*/
     public DrawBlock drawerBottom = new DrawDefault(), drawerTop = new DrawRegion("-top");
+    public DrawBlock drawerRecipeDefault;
     /**Whether to draw vanilla payload sprites. TODO convert to drawer or no?*/
     public boolean vanillaIO = false;
 
@@ -128,9 +127,7 @@ public class UniversalCrafter extends PayloadBlock{
         capacities = new int[Vars.content.items().size];
         consumesPower = false;
 
-        if(recipes.size == 1){
-            configurable = false;
-        }
+        if(recipes.size == 1) configurable = false;
 
         config(Integer.class, (UniversalBuild tile, Integer num) -> {
             var val = recipes.get(num);
@@ -171,17 +168,21 @@ public class UniversalCrafter extends PayloadBlock{
         if(hasLiquidIn) consume(new ConsumeLiquidsDynamic((UniversalBuild b) -> b.currentRecipe != null && b.currentRecipe.liqReqArray() != null ? b.currentRecipe.liqReqArray() : LiquidStack.empty));
 
         consumeBuilder.each(c -> c.multiplier = b -> ((UniversalBuild) b).currentRecipe != null && ((UniversalBuild) b).currentRecipe.isUnit ? state.rules.unitCost(b.team) : 1);
+
+        consumers = consumeBuilder.toArray(Consume.class);
+        optionalConsumers = consumeBuilder.select(consume -> consume.optional && !consume.ignore()).toArray(Consume.class);
+        nonOptionalConsumers = consumeBuilder.select(consume -> !consume.optional && !consume.ignore()).toArray(Consume.class);
+        updateConsumers = consumeBuilder.select(consume -> consume.update && !consume.ignore()).toArray(Consume.class);
     }
 
     @Override
     public void load(){
         super.load();
 
-        drawerTop.load(this);
-        drawerBottom.load(this);
-        recipes.each(recipe -> {
-            if(recipe.drawer != null) recipe.drawer.load(this);
-        });
+        if(drawerTop != null) drawerTop.load(this);
+        if(drawerBottom != null) drawerBottom.load(this);
+        if(drawerRecipeDefault != null) drawerRecipeDefault.load(this);
+        recipes.each(recipe -> recipe.load(this));
     }
 
     @Override
@@ -196,14 +197,11 @@ public class UniversalCrafter extends PayloadBlock{
     public void setStats(){
         super.setStats();
 
-        stats.remove(Stat.itemCapacity);
-        stats.remove(Stat.powerUse);
-
         stats.add(Stat.output, table -> {
             table.row();
             recipes.each(recipe -> {
                 if(recipe.index % 2 == 0) table.row();
-                table.add(recipe.recipeTable(true)).top();
+                table.add(recipe.style.recipeTable(true, recipe)).top().growX();
             });
         });
     }
@@ -212,8 +210,9 @@ public class UniversalCrafter extends PayloadBlock{
         public Recipe currentRecipe = recipes.get(0);
 
         public PayloadSeq mmmDelish = new PayloadSeq();
-        public Seq<Payload> outQueue = new Seq<>();
-        public BuildPayload container;
+        public Seq<Payload> payQueue = new Seq<>(4);
+
+        //todo add extra payload slots that recipes can use
 
         public float progress, warmup, totalProgress, spawnTime, heat = 0f, attributeSum;
         public float[] sideHeat = new float[4];
@@ -221,161 +220,12 @@ public class UniversalCrafter extends PayloadBlock{
         public UnlockableContent lastPayload;
         public @Nullable Vec2 commandPos;
 
-        //crafting logic
-        @Override
-        public void updateTile(){
-            if(hasHeat) heat = Math.max(calculateHeat(sideHeat), Mathf.approachDelta(heat, currentRecipe.heatOut * efficiency, heatIncreaseSpeed * delta()));
-
-            if(currentRecipe != null){
-                boolean yum = wants();
-
-                if(hasPayloads){
-                    if(yum &&moveInPayload() || instantInput){
-                        mmmDelish.add(payload.content());
-                        payDespawnEffect.at(x, y, drawrot(), new YootData(payload, this));
-                        payload = null;
-                    }else{
-                        if(payload == null){
-                            outputPayload();
-                        }else{
-                            moveOutPayload();
-                        }
-                    }
-                }
-
-                if(efficiency > 0 && shouldConsume()){
-                    progress += getProgressIncrease(currentRecipe.time) * (currentRecipe.isUnit ? state.rules.unitBuildSpeed(team) : 1f);
-                    warmup = Mathf.approachDelta(warmup, warmupTarget(), warmupSpeed);
-
-                    if(wasVisible && Mathf.chanceDelta(currentRecipe.updateEffectChance)){
-                        currentRecipe.updateEffect.at(this);
-                    }
-                }else{
-                    warmup = Mathf.approachDelta(warmup, 0f, warmupSpeed);
-                    if(currentRecipe.loseProgressOnIdle) progress = Mathf.approachDelta(progress, 0f, currentRecipe.progressLoseSpeed);
-                }
-                dumpOutputs();
-            }
-
-            if(progress >= 1f){
-                craft();
-            }
-
-            totalProgress += warmup * Time.delta;
-        }
-
-        public void craft(){
-            consume();
-
-            currentRecipe.craft(this);
-
-            var itemOut = currentRecipe.itemOut();
-            if(itemOut.size != 0){
-                itemOut.each(output -> {
-                    for(int i = 0; i < output.amount; i++){
-                        offload(output.item);
-                    }
-                });
-            }
-
-            var liqOut = currentRecipe.liqOut();
-            if(liqOut.size != 0){
-                liqOut.each(output -> {
-                    for(int i = 0; i < output.amount; i++){
-                        handleLiquid(this, output.liquid, Math.min(output.amount, liquidCapacity - liquids.get(output.liquid)));
-                    }
-                });
-            }
-
-            var payOut = currentRecipe.payOut();
-            if(payOut.size != 0){
-                payOut.each(output -> {
-                    for(int i = 0; i < output.amount; i++){
-                        outQueue.add(createPayload(output.item));
-                    }
-                });
-
-                if(instantFirstOutput){
-                    payVector.setZero();
-                    payload = outQueue.pop();
-                }
-            }
-
-            if(wasVisible){
-                currentRecipe.craftEffect.at(this);
-            }
-
-            progress %= 1f;
-        }
-
-        @Override
-        public boolean shouldConsume(){
-            if(currentRecipe != null){
-                if(!currentRecipe.shouldConsume(this)) return false;
-
-                if(currentRecipe.itemOut().size != 0){
-                    for(int i = 0; i < currentRecipe.itemOut().size; i++){
-                        if(items.get(currentRecipe.itemOut().get(i).item) + currentRecipe.itemOut().get(i).amount > itemCapacity){
-                            return false;
-                        }
-                    }
-                }
-
-                if(currentRecipe.liqOut().size != 0 && !ignoreLiquidFullness){
-                    boolean allFull = true;
-                    for(int i = 0; i < currentRecipe.liqOut().size; i++){
-                        if(liquids.get(currentRecipe.liqOut().get(i).liquid) + currentRecipe.liqOut().get(i).amount > liquidCapacity){
-                            if(!dumpExtraLiquid){
-                                return false;
-                            }
-                        }else{
-                            //if there's still space left, it's not full for all liquids
-                            allFull = false;
-                        }
-                    }
-
-                    if(allFull){
-                        return false;
-                    }
-                }
-
-                return enabled && !outputting;
-            }
-            return false;
-        } //todo add and use total output possibilities instead of just current
-
-        public void dumpOutputs(){
-            if(currentRecipe.itemOut().size != 0 && timer(timerDump, dumpTime / timeScale)){
-                currentRecipe.itemOut().each(output -> dump(output.item));
-            }
-
-            if(currentRecipe.liqOut().size != 0 && timer(timerDump, dumpTime / timeScale)){
-                for(int i = 0; i < currentRecipe.liqOut().size; i++){
-                    int dir = liquidOutputDirections.length > i ? liquidOutputDirections[i] : -1;
-                    dumpLiquid(currentRecipe.liqOut().get(i).liquid, 2f, dir);
-                }
-            }
-        } //todo add and use total output possibilities instead of just current
-
-
-
-        //payload
-        public boolean wants(){
-            return payload != null && currentRecipe != null &&
-                    currentRecipe.payReq().size != 0 && currentRecipe.payReq().contains(b -> b.item == payload.content());
-        }
-
-        public boolean wants(Payload pay){
-            return pay != null && currentRecipe != null && currentRecipe.payReq().size != 0 && currentRecipe.payReq().contains(b ->
-                            b.item == pay.content() && mmmDelish.get(pay.content()) < Mathf.round(b.amount * team.rules().unitCostMultiplier));
-        }
-
-        public void outputPayload(){
-            if(outQueue.isEmpty()) return;
+        public void outputPayQueue(){
+            if(payQueue.isEmpty()) return;
 
             if(!outputting){
                 spawnTime = paySpawnEffect.lifetime;
-                paySpawnEffect.at(x, y, drawrot(), new YootData(outQueue.peek(), this));
+                paySpawnEffect.at(x, y, drawrot(), new YootData(payQueue.peek(), this));
                 outputting = true;
             }
 
@@ -383,7 +233,7 @@ public class UniversalCrafter extends PayloadBlock{
 
             if(!waitForSpawnEffect || spawnTime < 0f){
                 payVector.setZero();
-                payload = outQueue.pop();
+                payload = payQueue.pop();
             }
         }
 
@@ -431,7 +281,7 @@ public class UniversalCrafter extends PayloadBlock{
                 if(canMove){
                     if(movePayload(payload)){
                         payload = null;
-                        outputting = false;
+                        outputting = false; //the only changes
                     }
                 }else if(canDump){
                     dumpPayload();
@@ -455,14 +305,70 @@ public class UniversalCrafter extends PayloadBlock{
         }
 
         @Override
-        public boolean acceptPayload(Building source, Payload payload){
-            return this.payload == null && currentRecipe != null && outQueue.isEmpty() && !outputting && wants(payload);
+        public void updateTile(){
+            if(hasHeat) heat = Math.max(calculateHeat(sideHeat), Mathf.approachDelta(heat, currentRecipe.heatOut * efficiency, heatIncreaseSpeed * delta()));
+
+            if(currentRecipe != null) currentRecipe.update(this);
+
+            totalProgress += warmup * Time.delta;
+        }
+
+        @Override
+        public void onProximityUpdate(){
+            super.onProximityUpdate();
+            if(currentRecipe.attribute != null)
+                attributeSum = sumAttribute(currentRecipe.attribute, tile.x, tile.y);
+        }
+
+        @Override
+        public void buildConfiguration(Table table){
+            Seq<Recipe> bRecipes = Seq.with(recipes).filter(r -> {
+                if(r.payOut().size != 0){
+                    for(int i = 0; i < r.payOut().size; i++){
+                        if(r.payOut().get(i).item instanceof Block b) return !state.rules.isBanned(b);
+                        if(r.payOut().get(i).item instanceof UnitType u) return !u.isBanned();
+                    }
+                }
+                return true;
+            });
+
+            if(bRecipes.any()){
+                ItemSelection.buildTable(UniversalCrafter.this, table, bRecipes, () -> currentRecipe, recipe -> configure(recipes.indexOf(rec -> rec == recipe)), selectionRows, selectionColumns);
+            }else{
+                table.table(Styles.black3, t -> t.add("@none").color(Color.lightGray));
+            }
         }
 
         @Override
         public void handlePayload(Building source, Payload payload){
             super.handlePayload(source, payload);
             lastPayload = payload.content();
+        }
+
+        @Override
+        public void pickedUp(){
+            attributeSum = 0f;
+            warmup = 0f;
+        }
+
+        @Override
+        public void write(Writes write){
+            super.write(write);
+            write.f(progress);
+            write.f(heat);
+            write.i(currentRecipe.index);
+            mmmDelish.write(write);
+            TypeIO.writeVecNullable(write, commandPos);
+        }
+
+        @Override
+        public void read(Reads read, byte revision){
+            super.read(read, revision);
+            progress = read.f();
+            heat = read.f();
+            currentRecipe = recipes.get(read.i());
+            mmmDelish.read(read);
+            commandPos = TypeIO.readVecNullable(read);
         }
 
 
@@ -487,12 +393,9 @@ public class UniversalCrafter extends PayloadBlock{
                 updatePayload();
                 payload.draw();
             }
-            if(container != null){
-                payload.set(x + payVector.x, y + payVector.y, payRotation);
-                container.draw();
-            }
 
             if(currentRecipe != null && currentRecipe.drawer != null) currentRecipe.drawer.draw(this);
+            else if(drawerRecipeDefault != null) drawerRecipeDefault.draw(this);
             drawerTop.draw(this);
         }
 
@@ -510,54 +413,45 @@ public class UniversalCrafter extends PayloadBlock{
 
 
 
-        //misc
+        //everything that does nothing except return a value in 1ish line
+        public UniversalCrafter crafter(){
+            return (UniversalCrafter)block;
+        }
+
+        public int timerDump(){
+            return timerDump;
+        }
+
+        public float dumpTime(){
+            return dumpTime;
+        }
+
         @Override
-        public void onProximityUpdate(){
-            super.onProximityUpdate();
-            if(currentRecipe.attribute != null)
-                attributeSum = sumAttribute(currentRecipe.attribute, tile.x, tile.y);
+        public boolean acceptPayload(Building source, Payload payload){
+            return currentRecipe != null && payQueue.isEmpty() && !outputting && currentRecipe.acceptPayload(this, payload);
         }
 
         @Override
         public boolean acceptItem(Building source, Item item){
-            return currentRecipe != null && currentRecipe.itemReqArray() != null && items.get(item) < getMaximumAccepted(item) &&
-                    Structs.contains(currentRecipe.itemReqArray(), stack -> stack.item == item);
+            return currentRecipe != null && currentRecipe.acceptItem(this, source, item);
         }
 
         @Override
-        public void buildConfiguration(Table table){
-            Seq<Recipe> bRecipes = Seq.with(recipes).filter(r -> {
-                if(r.payOut().size != 0){
-                    for(int i = 0; i < r.payOut().size; i++){
-                        if(r.payOut().get(i).item instanceof Block b) return !state.rules.isBanned(b);
-                        if(r.payOut().get(i).item instanceof UnitType u) return !u.isBanned();
-                    }
-                }
-                return true;
-            });
-
-            if(bRecipes.any()){
-                ItemSelection.buildTable(UniversalCrafter.this, table, bRecipes, () -> currentRecipe, recipe -> configure(recipes.indexOf(rec -> rec == recipe)), selectionRows, selectionColumns);
-            }else{
-                table.table(Styles.black3, t -> t.add("@none").color(Color.lightGray));
-            }
+        public boolean acceptLiquid(Building source, Liquid liquid){
+            return currentRecipe != null && currentRecipe.acceptLiquid(this, source, liquid);
         }
 
+        @Override
+        public boolean shouldConsume(){
+            return enabled && !outputting && currentRecipe.shouldConsume(this);
+        }
 
-
-        /*--- the stupid functions ---*/
         @Override
         public float efficiencyScale(){
             if(currentRecipe == null || currentRecipe.heatReq < 0) return 1f;
 
             float over = Math.max(heat - currentRecipe.heatReq, 0f);
             return Math.min(Mathf.clamp(heat / currentRecipe.heatReq) + over / currentRecipe.heatReq * currentRecipe.overheatScale, currentRecipe.maxHeatEfficiency);
-        }
-
-        @Override
-        public void pickedUp(){
-            attributeSum = 0f;
-            warmup = 0f;
         }
 
         @Override
@@ -631,26 +525,6 @@ public class UniversalCrafter extends PayloadBlock{
         @Override
         public void onCommand(Vec2 target){
             commandPos = target;
-        }
-
-        @Override
-        public void write(Writes write){
-            super.write(write);
-            write.f(progress);
-            write.f(heat);
-            write.i(currentRecipe.index);
-            mmmDelish.write(write);
-            TypeIO.writeVecNullable(write, commandPos);
-        }
-
-        @Override
-        public void read(Reads read, byte revision){
-            super.read(read, revision);
-            progress = read.f();
-            heat = read.f();
-            currentRecipe = recipes.get(read.i());
-            mmmDelish.read(read);
-            commandPos = TypeIO.readVecNullable(read);
         }
     }
 
